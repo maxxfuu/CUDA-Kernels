@@ -1,5 +1,5 @@
-//include <cstdio>
-//include <cuda_runtime.h>
+#include <cstdio>
+#include <cuda_runtime.h>
 
 __global__ void vectorAdd(float *a, float *b, float *c) {
     int i = threadIdx.x;
@@ -33,10 +33,10 @@ int main() {
     cudaMemcpy(d_a, h_a, bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, h_b, bytes, cudaMemcpyHostToDevice);
 
-    // launch the kernel -> kernel code is defined under the global execution specifer 
+    // launch the kernel -> kernel code is defined under the global execution specifier 
     vectorAdd<<<1, 8>>>(d_a, d_b, d_c);
 
-    // copy the results back into the device
+    // copy the results back into the host 
     cudaMemcpy(h_c, d_c, bytes, cudaMemcpyDeviceToHost);
 
     int success = 1;
