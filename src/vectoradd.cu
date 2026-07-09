@@ -1,8 +1,9 @@
 #include <cstdio>
 #include <cuda_runtime.h>
 
-__global__ void vectorAdd(float *a, float *b, float *c) {
-    int i = threadIdx.x;
+__global__ void vectorAdd(float *a, float *b, float *c, int num_elements) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;  // global thread index
+    if (i >= num_elements) return; // added boundary checking 
     c[i] = a[i] + b[i];
 }
 
