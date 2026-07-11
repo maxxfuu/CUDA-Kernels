@@ -46,6 +46,7 @@ int main() {
   );
 
   for (int batch = 0; batch < num_batches; ++batch) {
+    // offset for each batch 
     float* d_in = device_input + batch * num_rows * num_cols;
     float* d_out = device_output + batch * num_rows * num_cols;
 
