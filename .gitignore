@@ -1,0 +1,5 @@
+# Vendored reference project — kept locally, excluded from this repo
+book.cu-main/
+
+# OS junk
+.DS_Store
