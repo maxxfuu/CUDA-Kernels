@@ -3,3 +3,13 @@ book.cu-main/
 
 # OS junk
 .DS_Store
+
+# MNIST dataset (regenerate via naive-kernels/mnist/data.ipynb)
+naive-kernels/mnist/data/*.bin
+
+# generated gradient-check reference outputs (regenerate via export_reference.py)
+naive-kernels/mnist/from_scratch/ref/*.bin
+naive-kernels/mnist/from_scratch/_pytorch_grads.npz
+
+# compiled binary
+naive-kernels/mnist/from_scratch/mnist
