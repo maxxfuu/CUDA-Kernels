@@ -1,73 +1,111 @@
 #include <stdio.h>
-#include <stdlib.h> 
-#include <math.h> 
-#include <time.h>
+#include <stdlib.h>
+#include <math.h>
 
 #define INPUT_SIZE 784
 #define HIDDEN_SIZE 256
 #define OUTPUT_SIZE 10
 #define BATCH_SIZE 8
-#define EPOCHS 10
 #define LEARNING_RATE 0.01
 
-
-typedef struct {
-  float *w1, *w2, *b1, *b2;;
-  float *grad_w1, *grad_w2, *grad_b1, *grad_b2;
-} NN;
-
-void init_w(float* w, int in_size, int out_size) { 
-  float scale = sqrtf(6.0f / in_size);
-  for (int i = 0; i < in_size; i++) {
-    w[i] = (float)rand() / (RAND_MAX) * 2.0f * scale - scale;
-  } 
-}
-
-void init_b(float* bias, int size) {
-  for (int i = 0; i , size; i++) {
-    bias[i] = 0.0f;
-  }
-}
-
-void init_nn(NN *nn) { 
-  nn->w1 = malloc(INPUT_SIZE * OUTPUT_SIZE * sizeof(float));         // (784 x 256) * sieof(float), mem allocation of a contigous array   
-  nn->w2 = malloc(INPUT_SIZE * OUTPUT_SIZE * sizeof(float));
-  nn->b1 = malloc(INPUT_SIZE * OUTPUT_SIZE * sizeof(float));
-  nn->b2 = malloc(INPUT_SIZE * OUTPUT_SIZE * sizeof(float));
-
-  nn->grad_w1 = malloc(INPUT_SIZE * OUTPUT_SIZE * sizeof(float));
-  nn->grad_w2 = malloc(INPUT_SIZE * OUTPUT_SIZE * sizeof(float));
-  nn->grad_b1 = malloc(INPUT_SIZE * OUTPUT_SIZE * sizeof(float));
-  nn->grad_b2 = malloc(INPUT_SIZE * OUTPUT_SIZE * sizeof(float));
-
-  init_w(nn->w1, INPUT_SIZE, HIDDEN_SIZE);
-  init_w(nn->w2, HIDDEN_SIZE, OUTPUT_SIZE);
-  init_b(nn->b1, INPUT_SIZE); 
-  init_b(nn->b2, INPUT_SIZE); 
-}
-
 void matmul_forward(float *A, float *B, float *C, int m, int n, int k) {
-  for (int i = 0; i < m; i++) {                                              // row i of A: (i, _)
-    for (int j = 0; j < k; k++) {                                            // col j of B: (_, j)
-      C[i * k + j] = 0.0f;                                                 // i amount of rows, k amount of ele for each row, k column within row 
-      for (int l = 0; l < n; l++) {                                        // shared dim, l: (i, l) x (l, j)
-        C[i * k + j] += A[i * n + l] * B[l * k + j];
-      } 
+  for (int i = 0; i < m; i++) {
+    for (int j = 0; j < k; j++) {
+      C[i*k+j] = 0.0f;
+      for (int l = 0; l < n; l++) { 
+        C[i*k+j] += A[i*n + l] * B[l*k + j];
+      }
     }
   }
 }
 
-void bias_forward(float *Z, float *b, int batch_size, int size) {           // Z is the matrix output of A @ B 
-  for (int r = 0; r < batch_size; b++) {
-    for (int i = 0; i < size; i++) {
-      Z[r * size + i] += b[i]; 
-    }
-  }
-}
+// B needs to iterate by col: j for B moves across each col, k is the size of the width and l is row its currently on. n is the amount of rows in B
+// A needs to iterate by row: m is how many rows, n is width of a row,
+
+// n is shared dimension 
+
+void matmul_at_b() {}
+
+void matmul_a_bt() {}
 
 void relu_forward(float *x, int size) {
   for (int i = 0; i < size; i++) {
-    x[i] = fmaxf(0.0, x[i]);
+    x[i] = fmaxf(0.0f, x[i]);
   }
 }
 
+void relu_backward(float *x, int size) {}
+
+// Z: batch_size x size. Filled by matmul_forward already
+// b: 
+void bias_forward(float *Z, float *b, int m, int k) {
+  for (int i = 0; i < m; i++) {
+    for (int j = 0; j < k; j++) {
+      Z[i*k+j] += b[j];
+    }
+  }
+}
+
+void bias_backward() {}
+
+// logits: output as vector 
+// rows: row of logit vector 
+// cols: col of logit vector
+void softmax(float *logits, int rows, int cols) {
+  for (int r = 0; r < rows; r++) {
+    float max_val = -INFINITY;
+
+    // first pass: find max value within row  
+    for (int c = 0; c < cols; c++) {
+      if (max_val < logits[r * cols + c]) {
+        max_val = logits[r * cols + c];
+      }
+    }
+
+    // second pass: subtract and exponentiate while setting up sum 
+    float sum = 0.0f;
+    for (int c = 0; c < cols; c++) {
+      logits[r*cols+c] -= max_val; 
+      logits[r*cols+c] = expf(logits[r*cols+c]);
+      sum += logits[r*cols+c];
+    }
+
+    // third pass, divide by the same to get the probability over the whole row
+    for (int c = 0; c < cols; c++) {
+     logits[r*cols+c] /= sum;
+    }
+  }
+}
+
+// prob is the out of softmax, assume (8,10)
+// 
+float cross_entropy_loss(float *probs, int *y, int rows, int cols) {
+  float total_loss = 0.0f; 
+
+  for (int r = 0; r < rows; r++) {
+    int target = y[r]; 
+    total_loss += -logf(probs[r*cols+target]);
+  }
+
+  return total_loss / rows;
+}
+
+void compute_output_gradients() {}
+
+void sgd_update() {}
+
+void softmax_ce_grad(float *probs, int *y, float *dlogits, int rows, int cols) {
+  for (int r = 0; r < rows; r++) {
+    int target = y[r];
+    for (int c = 0; c < cols; c++) {
+      dlogits[r*cols + c] = probs[r*cols + c] / rows;
+      if (c == target) {
+        dlogits[r*cols + c] -= 1.0f / rows;
+      }
+    }
+  }
+}
+
+void linear_backward(float *X, float *W, float *dY, float *dX, float *dW, float *db, int rows, int in, int out) {
+                                     
+}
