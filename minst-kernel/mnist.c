@@ -24,9 +24,19 @@ void matmul_forward(float *A, float *B, float *C, int m, int n, int k) {
 
 // n is shared dimension 
 
-void matmul_at_b(float *A, float *B, float *C, int m, int n, int k) {}
+// (2x1) (2x3), 
+void matmul_at_b(float *A, float *B, float *C, int m, int n, int k) {
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < k; j++) {
+      C[i*k+j] = 0.0f; 
+      for (int l = 0; l < m; l++) {
+        C[i*k+j] += A[l*n+i] * B[l*k+j];  
+      }
+    }
+  } 
+}
 
-// (1x2) (3x2) : (m, n) @ (k, n)
+// (1x2) (3x2)
 void matmul_a_bt(float *A, float *B, float *C, int m, int n, int k) {
   for (int i = 0; i < m; i++) {
     for (int j = 0; j < k; j++) {
