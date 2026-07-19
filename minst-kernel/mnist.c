@@ -128,19 +128,22 @@ void softmax_ce_grad(float *probs, int *y, float *dlogits, int rows, int cols) {
 }
 
 void linear_backward(float *X, float *W, float *dY, float *dX, float *dW, float *db, int rows, int in, int out) {
-  // dX = dY * W^T, dY is the upstream gradient. 
-
-  /// db = dY 
-  for (int j = 0; j < out; j++) {
+  for (int j = 0; j < out; j++) {         // db = dY 
     db[j] = 0.0f;
     for (int r = 0; r < rows; r++) {
       db[j] += dY[r * out + j];
     }
   }
-
   matmul_at_b(X,  dY, dW, rows, in, out);   // dW
   matmul_a_bt(dY, W,  dX, rows, out, in);   // dX
+}
 
-
-
+void relu_backwards(float *X, float *dY, float *dX, int size) {
+  for (int i = 0; i < size; i++) {
+    if (X[i] > 0.0f) {
+      dX[i] = dY[i];
+    } else {
+      dX[i] = 0.0f;
+    }
+  }
 }
