@@ -138,4 +138,9 @@ void linear_backward(float *X, float *W, float *dY, float *dX, float *dW, float 
     }
   }
 
+  matmul_at_b(X,  dY, dW, rows, in, out);   // dW
+  matmul_a_bt(dY, W,  dX, rows, out, in);   // dX
+
+
+
 }
