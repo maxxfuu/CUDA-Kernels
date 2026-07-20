@@ -194,7 +194,7 @@ int main(void) {
   printf("loaded %d train / %d test samples\n", NUM_TRAIN, NUM_TEST);
 
   int num_batches = NUM_TRAIN / BATCH_SIZE;
-  int epochs = 3;
+  int epochs = 20;
 
   for (int epoch = 0; epoch < epochs; epoch++) {
     float epoch_loss = 0.0f;
