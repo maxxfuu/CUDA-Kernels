@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
+#include <cuda_runtime.h>
 #define CUDA_CHECK(call) do { cudaError_t error = call; if (error != cudaSuccess) { fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(error)); cudaDeviceReset(); exit(EXIT_FAILURE); } } while(0)
 
 #define INPUT_SIZE 784
@@ -40,13 +41,6 @@ void initialize_neural_netowork(NeuralNetwork *nn) {
   initalize_random_weights(nn);
 }
 
-void initialize_bias(float *bias, int size) {
-  for (int i = 0; i < size; i++) {
-      bias[i] = 0.0f;
-  }
-}
-
-// 
 void initalize_random_weights(NeuralNetwork *nn) {
   float *h_weights1 = (float *)malloc(INPUT_SIZE * HIDDEN_SIZE * sizeof(float));
   init_weights(h_weights1, INPUT_SIZE * HIDDEN_SIZE);
@@ -69,13 +63,31 @@ void initalize_random_weights(NeuralNetwork *nn) {
   free(h_bias2)
 }
 
+__global__ void bias_forward(float *x, float *bias, int batch_size, int size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  int batch = idx / batch_size;
+  int i = idx % size;
+
+  if (batch < batch_size && i < size) {
+    x[idx] += bias[i];
+  }
+}
+
+__global__ void matmul_forward(float *A, float *B, float *C, int m, int n, int k) {
+  int col = blockIdx.x * blockDim.x + threadIdx.x;
+  int row = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (row < m && col < k) {
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+      sum += A[row*n+i] * B[i*k+col];
+    }
+
+    C[row * k + col] = sum;
+  }
 
 
-// allocate memory on host and initialize data 
-
-
-
-void matmul_forward(float *A, float *B, float *C, int m, int n, int k) {
   for (int i = 0; i < m; i++) {
     for (int j = 0; j < k; j++) {
       C[i*k+j] = 0.0f;
