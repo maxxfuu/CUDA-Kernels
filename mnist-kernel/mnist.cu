@@ -43,13 +43,13 @@ void initialize_neural_netowork(NeuralNetwork *nn) {
 
 void initalize_random_weights(NeuralNetwork *nn) {
   float *h_weights1 = (float *)malloc(INPUT_SIZE * HIDDEN_SIZE * sizeof(float));
-  init_weights(h_weights1, INPUT_SIZE * HIDDEN_SIZE);
+  initialize_weights(h_weights1, INPUT_SIZE * HIDDEN_SIZE);
   CUDA_CHECK(cudaMemcpy(nn->weight1s, h_weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
   free(h_weights1);
 
-  float *h_weights1 = (float *)malloc(HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float));
-  init_weights(h_weights1, HIDDEN_SIZE * OUTPUT_SIZE);
-  CUDA_CHECK(cudaMemcpy(nn->weight1s, h_weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+  float *h_weights2 = (float *)malloc(HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float));
+  initialize_weights(h_weights2, HIDDEN_SIZE * OUTPUT_SIZE);
+  CUDA_CHECK(cudaMemcpy(nn->weight2s, h_weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
   free(h_weights2);
 
   float *h_bias1 = (float *)malloc(HIDDEN_SIZE * sizeof(float));
@@ -58,9 +58,9 @@ void initalize_random_weights(NeuralNetwork *nn) {
   free(h_bias1);
   
   float *h_bias2 = (float *)malloc(OUTPUT_SIZE * sizeof(float));
-  initalize_bias(h_bias1, OUTPUT_SIZE);
+  initalize_bias(h_bias2, OUTPUT_SIZE);
   CUDA_CHECK(cudaMemcpy(nn->bias2, h_bias2, OUTPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
-  free(h_bias2)
+  free(h_bias2);
 }
 
 __global__ void bias_forward(float *x, float *bias, int batch_size, int size) {
@@ -220,12 +220,10 @@ void linear_backward(float *X, float *W, float *dY, float *dX, float *dW, float 
   CUDA_CHECK(cudaGetLastError());
 }
 
-// Uniform random in [-limit, limit]. Xavier-style: limit = sqrt(6/(fan_in+fan_out)).
-void init_weights(float *W, int fan_in, int fan_out) {
-  float limit = sqrtf(6.0f / (fan_in + fan_out));
-  for (int i = 0; i < fan_in * fan_out; i++) {
-    float u = (float)rand() / (float)RAND_MAX;   // [0,1]
-    W[i] = (u * 2.0f - 1.0f) * limit;            // [-limit, limit]
+void initialize_weights(float *weights, int input_size, int output_size) {
+  float scale = sqrtf(6.0f / input_size);
+  for (int i = 0; i < input_size * output_size; i++) {
+    weights[i] = ((float)rand() / RAND_MAX) * 2.0f * scale - scale;
   }
 }
 
@@ -253,8 +251,8 @@ int main(void) {
   float *b1 = calloc(HIDDEN_SIZE, sizeof(float));
   float *W2 = malloc(sizeof(float) * HIDDEN_SIZE * OUTPUT_SIZE);
   float *b2 = calloc(OUTPUT_SIZE, sizeof(float));
-  init_weights(W1, INPUT_SIZE,  HIDDEN_SIZE);
-  init_weights(W2, HIDDEN_SIZE, OUTPUT_SIZE);
+  initialize_weights(W1, INPUT_SIZE,  HIDDEN_SIZE);
+  initialize_weights(W2, HIDDEN_SIZE, OUTPUT_SIZE);
 
   float *dW1 = malloc(sizeof(float) * INPUT_SIZE  * HIDDEN_SIZE);
   float *db1 = malloc(sizeof(float) * HIDDEN_SIZE);
