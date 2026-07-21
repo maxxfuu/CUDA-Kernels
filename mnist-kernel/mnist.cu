@@ -25,17 +25,17 @@ typedef struct {
 } NeuralNetwork;
 
 // Allocate memory on GPU VRAM   
-void initialize_neural_netowork(NeuralNetwork *nn) {
+void initialize_neural_network(NeuralNetwork *nn) {
   CUDA_CHECK(cudaMalloc(&nn->weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&nn->weights1, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&nn->weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
   
-  CUDA_CHECK(cudaMalloc(&nn->bias1, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&nn->bias2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&nn->bias1, HIDDEN_SIZE * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&nn->bias2, OUTPUT_SIZE * sizeof(float)));
 
-  CUDA_CHECK(cudaMalloc(&nn->grad_weight1, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&nn->grad_weight2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&nn->grad_weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&nn->grad_weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
 
-  CUDA_CHECK(cudaMalloc(&nn->grad_bias1, OUTPUT_SIZE * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&nn->grad_bias1, HIDDEN_SIZE * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&nn->grad_bias2, OUTPUT_SIZE * sizeof(float)));
 
   initalize_random_weights(nn);
@@ -43,22 +43,20 @@ void initialize_neural_netowork(NeuralNetwork *nn) {
 
 void initalize_random_weights(NeuralNetwork *nn) {
   float *h_weights1 = (float *)malloc(INPUT_SIZE * HIDDEN_SIZE * sizeof(float));
-  initialize_weights(h_weights1, INPUT_SIZE * HIDDEN_SIZE);
-  CUDA_CHECK(cudaMemcpy(nn->weight1s, h_weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+  initialize_weights(h_weights1, INPUT_SIZE, HIDDEN_SIZE);
+  CUDA_CHECK(cudaMemcpy(nn->weights1, h_weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
   free(h_weights1);
 
   float *h_weights2 = (float *)malloc(HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float));
-  initialize_weights(h_weights2, HIDDEN_SIZE * OUTPUT_SIZE);
-  CUDA_CHECK(cudaMemcpy(nn->weight2s, h_weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+  initialize_weights(h_weights2, HIDDEN_SIZE, OUTPUT_SIZE);
+  CUDA_CHECK(cudaMemcpy(nn->weights2, h_weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
   free(h_weights2);
 
-  float *h_bias1 = (float *)malloc(HIDDEN_SIZE * sizeof(float));
-  initalize_bias(h_bias1, HIDDEN_SIZE);
+  float *h_bias1 = (float *)calloc(HIDDEN_SIZE, sizeof(float));
   CUDA_CHECK(cudaMemcpy(nn->bias1, h_bias1, HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
   free(h_bias1);
   
-  float *h_bias2 = (float *)malloc(OUTPUT_SIZE * sizeof(float));
-  initalize_bias(h_bias2, OUTPUT_SIZE);
+  float *h_bias2 = (float *)calloc(OUTPUT_SIZE, sizeof(float));
   CUDA_CHECK(cudaMemcpy(nn->bias2, h_bias2, OUTPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
   free(h_bias2);
 }
@@ -181,9 +179,6 @@ float cross_entropy_loss(float *probs, int *y, int rows, int cols) {
   return total_loss / rows;
 }
 
-// params: weights or biases to update (flat)
-// grads:  their gradients (same shape)
-// SGD step: walk each parameter one small step opposite its gradient.
 __global__ void sgd_update(float *params, float *grads, int size) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -227,7 +222,6 @@ void initialize_weights(float *weights, int input_size, int output_size) {
   }
 }
 
-// The MNIST .bin files are raw dumps: X is float32 already normalized to [0,1]
 void load_floats(const char *path, float *dst, int count) {
   FILE *f = fopen(path, "rb");
   if (!f) { fprintf(stderr, "ERROR: cannot open %s\n", path); exit(1); }
@@ -244,28 +238,17 @@ void load_ints(const char *path, int *dst, int count) {
   fclose(f);
 }
 
-int main(void) {
-  srand(42); // seed 
+int main(void) { 
+  NeuralNetwork nn; 
+  initialize_neural_network(&nn);
 
-  float *W1 = malloc(sizeof(float) * INPUT_SIZE  * HIDDEN_SIZE);
-  float *b1 = calloc(HIDDEN_SIZE, sizeof(float));
-  float *W2 = malloc(sizeof(float) * HIDDEN_SIZE * OUTPUT_SIZE);
-  float *b2 = calloc(OUTPUT_SIZE, sizeof(float));
-  initialize_weights(W1, INPUT_SIZE,  HIDDEN_SIZE);
-  initialize_weights(W2, HIDDEN_SIZE, OUTPUT_SIZE);
-
-  float *dW1 = malloc(sizeof(float) * INPUT_SIZE  * HIDDEN_SIZE);
-  float *db1 = malloc(sizeof(float) * HIDDEN_SIZE);
-  float *dW2 = malloc(sizeof(float) * HIDDEN_SIZE * OUTPUT_SIZE);
-  float *db2 = malloc(sizeof(float) * OUTPUT_SIZE);
-
-  float *z1 = malloc(sizeof(float) * BATCH_SIZE * HIDDEN_SIZE);
-  float *z2 = malloc(sizeof(float) * BATCH_SIZE * OUTPUT_SIZE);
-
-  float *dlogits = malloc(sizeof(float) * BATCH_SIZE * OUTPUT_SIZE);
-  float *da1     = malloc(sizeof(float) * BATCH_SIZE * HIDDEN_SIZE);
-  float *dz1     = malloc(sizeof(float) * BATCH_SIZE * HIDDEN_SIZE);
-  float *dXin    = malloc(sizeof(float) * BATCH_SIZE * INPUT_SIZE);
+  float *z1, *z2, *dlogits, *da1, *dz1, *dXin;
+  CUDA_CHECK(cudaMalloc(&z1, sizeof(float) * BATCH_SIZE * HIDDEN_SIZE));
+  CUDA_CHECK(cudaMalloc(&z2, sizeof(float) * BATCH_SIZE * OUTPUT_SIZE));
+  CUDA_CHECK(cudaMalloc(&dlogits, sizeof(float) * BATCH_SIZE * OUTPUT_SIZE));
+  CUDA_CHECK(cudaMalloc(&da1, sizeof(float) * BATCH_SIZE * HIDDEN_SIZE));
+  CUDA_CHECK(cudaMalloc(&dz1, sizeof(float) * BATCH_SIZE * HIDDEN_SIZE));
+  CUDA_CHECK(cudaMalloc(&dXin, sizeof(float) * BATCH_SIZE * INPUT_SIZE));
 
   float *X = malloc(sizeof(float) * NUM_TRAIN * INPUT_SIZE);
   int   *y = malloc(sizeof(int)   * NUM_TRAIN);
@@ -311,20 +294,20 @@ int main(void) {
       // backward 
       softmax_ce_grad(z2, yb, dlogits, BATCH_SIZE, OUTPUT_SIZE);
 
-      // layer 2 consumes dlogits -> dW2, db2, da1
-      linear_backward(z1, W2, dlogits, da1, dW2, db2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
+      // layer 2 consumes dlogits -> nn.grad_weights2, nn.grad_bias2, da1
+      linear_backward(z1, W2, dlogits, da1, nn.grad_weights2, nn.grad_bias2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
 
       // relu: mask da1 by where a1 (=z1) was on
       relu_backward(da1, z1, dz1, BATCH_SIZE * HIDDEN_SIZE);
 
-      // layer 1 consumes dz1 -> dW1, db1 (dXin unused)
-      linear_backward(Xb, W1, dz1, dXin, dW1, db1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
+      // layer 1 consumes dz1 -> nn.grad_weights1, nn.grad_bias1 (dXin unused)
+      linear_backward(Xb, W1, dz1, dXin, nn.grad_weights1, nn.grad_bias1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
 
       // update 
-      sgd_update(W1, dW1, INPUT_SIZE  * HIDDEN_SIZE);
-      sgd_update(b1, db1, HIDDEN_SIZE);
-      sgd_update(W2, dW2, HIDDEN_SIZE * OUTPUT_SIZE);
-      sgd_update(b2, db2, OUTPUT_SIZE);
+      sgd_update(W1, nn.grad_weights1, INPUT_SIZE  * HIDDEN_SIZE);
+      sgd_update(b1, nn.grad_bias1, HIDDEN_SIZE);
+      sgd_update(W2, nn.grad_weights2, HIDDEN_SIZE * OUTPUT_SIZE);
+      sgd_update(b2, nn.grad_bias2, OUTPUT_SIZE);
     }
 
     printf("epoch %2d | loss %.4f | acc %.1f%%\n", epoch, epoch_loss / num_batches, 100.0f * correct / (num_batches * BATCH_SIZE));
@@ -354,9 +337,9 @@ int main(void) {
   printf("---\ntest accuracy: %.2f%%\n", 100.0f * test_correct / (test_batches * BATCH_SIZE));
 
   free(W1); free(b1); free(W2); free(b2);
-  free(dW1); free(db1); free(dW2); free(db2);
-  free(z1); free(z2);
-  free(dlogits); free(da1); free(dz1); free(dXin);
+  free(nn.grad_weights1); free(nn.grad_bias1); free(nn.grad_weights2); free(nn.grad_bias2);
+  cudaFree(z1); cudaFree(z2);
+  cudaFree(dlogits); cudaFree(da1); cudaFree(dz1); cudaFree(dXin);
   free(X); free(y); free(Xt); free(yt);
   return 0;
 }
