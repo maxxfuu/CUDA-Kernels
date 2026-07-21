@@ -76,39 +76,40 @@ __global__ void bias_forward(float *x, float *bias, int batch_size, int size) {
 
 __global__ void matmul_forward(float *A, float *B, float *C, int m, int n, int k) {
   int col = blockIdx.x * blockDim.x + threadIdx.x;
-  int row = blockIdx.x * blockDim.x + threadIdx.x;
+  int row = blockIdx.y * blockDim.y + threadIdx.y;
 
   if (row < m && col < k) {
     float sum = 0.0f;
     for (int i = 0; i < n; i++) {
       sum += A[row*n+i] * B[i*k+col];
     }
-
     C[row * k + col] = sum;
   }
 }
 
-// assume, (2x1) (2x3)
-void matmul_at_b(float *A, float *B, float *C, int m, int n, int k) {
-  for (int i = 0; i < n; i++) {
-    for (int j = 0; j < k; j++) {
-      C[i*k+j] = 0.0f; 
-      for (int l = 0; l < m; l++) {
-        C[i*k+j] += A[l*n+i] * B[l*k+j];  
-      }
+__global__ void matmul_at_b(float *A, float *B, float *C, int m, int n, int k) {
+  int row = blockIdx.y * blockDim.y + threadIdx.y;
+  int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (row < n && col < k) {
+    float sum = 0.0f;
+    for (int i = 0; i < m; i++) {
+      sum += A[i*n+row] * B[i*k+col];  
     }
-  } 
+    C[row*k+col] = sum;
+  }
 }
 
-// assume, (1x2) (3x2)
-void matmul_a_bt(float *A, float *B, float *C, int m, int n, int k) {
-  for (int i = 0; i < m; i++) {
-    for (int j = 0; j < k; j++) {
-      C[i*k+j] = 0.0f; 
-      for (int l = 0; l < n; l++) {
-        C[i*k+j] += A[i*n+l] * B[j*n+l];  
-      }
+__global__ void matmul_a_bt(float *A, float *B, float *C, int m, int n, int k) {
+  int row = blockIdx.y * blockDim.y + threadIdx.y;
+  int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (row < m && col < k) {
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+      sum += A[row*n+i] * B[col*n+i];  
     }
+    C[row*k+col] = sum;
   }
 }
 
@@ -132,13 +133,18 @@ __global__ void relu_backward(float *dY, float *activation, float *dX, int rows,
   }
 }
 
-void bias_forward(float *Z, float *b, int m, int k) {
-  for (int i = 0; i < m; i++) {
-    for (int j = 0; j < k; j++) {
-      Z[i*k+j] += b[j];
+__global__ void bias_backward(float *db, float *dY, int rows, int out) {
+  int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (col < out) {
+    float sum = 0.0f;
+
+    for (int row = 0; row < rows; row++) {
+      sum += dY[row * out + col];
     }
+    db[col] = sum;
   }
-}
+} 
 
 void softmax(float *logits, int rows, int cols) {
   for (int r = 0; r < rows; r++) {
@@ -178,9 +184,11 @@ float cross_entropy_loss(float *probs, int *y, int rows, int cols) {
 // params: weights or biases to update (flat)
 // grads:  their gradients (same shape)
 // SGD step: walk each parameter one small step opposite its gradient.
-void sgd_update(float *params, float *grads, int size) {
-  for (int i = 0; i < size; i++) {
-    params[i] -= LEARNING_RATE * grads[i];
+__global__ void sgd_update(float *params, float *grads, int size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (idx < size) {
+    params[idx] -= LEARNING_RATE * grads[idx];
   }
 }
 
@@ -197,14 +205,19 @@ void softmax_ce_grad(float *probs, int *y, float *dlogits, int rows, int cols) {
 }
 
 void linear_backward(float *X, float *W, float *dY, float *dX, float *dW, float *db, int rows, int in, int out) {
-  for (int j = 0; j < out; j++) {         // db = dY 
-    db[j] = 0.0f;
-    for (int r = 0; r < rows; r++) {
-      db[j] += dY[r * out + j];
-    }
-  }
-  matmul_at_b(X,  dY, dW, rows, in, out);   // dW
-  matmul_a_bt(dY, W,  dX, rows, out, in);   // dX
+  dim3 block(16, 16);
+
+  dim3 grid_dw((out + block.x - 1) / block.x, (in + block.y - 1) / block.y);
+  matmul_at_b<<<grid_dw, block>>>(X, dY, dW, rows, in, out);
+
+  dim3 grid_dx((in + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
+  matmul_a_bt<<<grid_dx, block>>>(dY, W, dX, rows, out, in);
+
+  int threads = 256;
+  int blocks = (out + threads - 1) / threads;
+
+  bias_backward<<<blocks, threads>>>(db, dY, rows, out);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 // Uniform random in [-limit, limit]. Xavier-style: limit = sqrt(6/(fan_in+fan_out)).
