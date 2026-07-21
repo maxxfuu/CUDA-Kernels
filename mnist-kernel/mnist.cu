@@ -122,9 +122,13 @@ __global__ void relu_forward(float *x, int rows, int cols) {
     }
 }
 
-void relu_backward(float *dY, float *activation, float *dX, int size) {
-  for (int i = 0; i < size; i++) {
-    dX[i] = activation[i] > 0.0f ? dY[i] : 0.0f;
+__global__ void relu_backward(float *dY, float *activation, float *dX, int rows, int cols) {
+  int row = blockIdx.y * blockDim.y + threadIdx.y; 
+  int col = blockIdx.x * blockDim.x + threadIdx.x; 
+
+  if (row < rows && col < cols) {
+    int idx = row * cols + col;
+    dX[idx] = activation[idx] > 0.0f ? dY[idx] : 0.0f;
   }
 }
 
