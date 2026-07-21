@@ -6,10 +6,10 @@ book.cu-main/
 
 # MNIST dataset (regenerate via naive-kernels/mnist/data.ipynb)
 naive-kernels/mnist/data/*.bin
-minst-kernel/data/*.bin
+mnist-kernel/data/*.bin
 
 # compiled C binary
-minst-kernel/mnist
+mnist-kernel/mnist
 
 # generated gradient-check reference outputs (regenerate via export_reference.py)
 naive-kernels/mnist/from_scratch/ref/*.bin
