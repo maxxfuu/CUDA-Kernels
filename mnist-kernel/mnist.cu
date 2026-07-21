@@ -86,16 +86,6 @@ __global__ void matmul_forward(float *A, float *B, float *C, int m, int n, int k
 
     C[row * k + col] = sum;
   }
-
-
-  for (int i = 0; i < m; i++) {
-    for (int j = 0; j < k; j++) {
-      C[i*k+j] = 0.0f;
-      for (int l = 0; l < n; l++) { 
-        C[i*k+j] += A[i*n + l] * B[l*k + j];
-      }
-    }
-  }
 }
 
 // assume, (2x1) (2x3)
@@ -122,10 +112,14 @@ void matmul_a_bt(float *A, float *B, float *C, int m, int n, int k) {
   }
 }
 
-void relu_forward(float *x, int size) {
-  for (int i = 0; i < size; i++) {
-    x[i] = fmaxf(0.0f, x[i]);
-  }
+__global__ void relu_forward(float *x, int rows, int cols) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y; 
+    int col = blockIdx.x * blockDim.x + threadIdx.x; 
+
+    if (row < rows && col < cols) {
+      int idx = row * cols + col;
+      x[idx] = fmaxf(0.0f, x[idx]);
+    }
 }
 
 void relu_backward(float *dY, float *activation, float *dX, int size) {
