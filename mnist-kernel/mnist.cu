@@ -24,7 +24,10 @@ typedef struct {
   float *grad_bias2;    // Second layer bias gradients
 } NeuralNetwork;
 
-// Allocate memory on GPU VRAM   
+void initalize_random_weights(NeuralNetwork *nn);
+void initialize_weights(float *weights, int input_size, int output_size);
+
+// Allocate memory on GPU VRAM
 void initialize_neural_network(NeuralNetwork *nn) {
   CUDA_CHECK(cudaMalloc(&nn->weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&nn->weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
@@ -64,7 +67,7 @@ void initalize_random_weights(NeuralNetwork *nn) {
 __global__ void bias_forward(float *x, float *bias, int batch_size, int size) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-  int batch = idx / batch_size;
+  int batch = idx / size;
   int i = idx % size;
 
   if (batch < batch_size && i < size) {
@@ -250,28 +253,28 @@ int main(void) {
   CUDA_CHECK(cudaMalloc(&dz1, sizeof(float) * BATCH_SIZE * HIDDEN_SIZE));
   CUDA_CHECK(cudaMalloc(&dXin, sizeof(float) * BATCH_SIZE * INPUT_SIZE));
 
-  float *h_X = malloc(sizeof(float) * NUM_TRAIN * INPUT_SIZE);
+  float *h_X = (float *)malloc(sizeof(float) * NUM_TRAIN * INPUT_SIZE);
   load_floats("data/X_train.bin", h_X, NUM_TRAIN * INPUT_SIZE);
   float *d_X;
   CUDA_CHECK(cudaMalloc(&d_X, sizeof(float) * NUM_TRAIN * INPUT_SIZE));
   CUDA_CHECK(cudaMemcpy(d_X, h_X, sizeof(float) * NUM_TRAIN * INPUT_SIZE, cudaMemcpyHostToDevice));
   free(h_X);
 
-  int *h_y = malloc(sizeof(int) * NUM_TRAIN);
+  int *h_y = (int *)malloc(sizeof(int) * NUM_TRAIN);
   load_ints("data/y_train.bin", h_y, NUM_TRAIN);
   int *d_y;
   CUDA_CHECK(cudaMalloc(&d_y, sizeof(int) * NUM_TRAIN));
   CUDA_CHECK(cudaMemcpy(d_y, h_y, sizeof(int) * NUM_TRAIN, cudaMemcpyHostToDevice));
   free(h_y);
 
-  float *h_Xt = malloc(sizeof(float) * NUM_TEST * INPUT_SIZE);
+  float *h_Xt = (float *)malloc(sizeof(float) * NUM_TEST * INPUT_SIZE);
   load_floats("data/X_test.bin", h_Xt, NUM_TEST * INPUT_SIZE);
   float *d_Xt;
   CUDA_CHECK(cudaMalloc(&d_Xt, sizeof(float) * NUM_TEST * INPUT_SIZE));
   CUDA_CHECK(cudaMemcpy(d_Xt, h_Xt, sizeof(float) * NUM_TEST * INPUT_SIZE, cudaMemcpyHostToDevice));
   free(h_Xt);
 
-  int *h_yt = malloc(sizeof(int) * NUM_TEST);
+  int *h_yt = (int *)malloc(sizeof(int) * NUM_TEST);
   load_ints("data/y_test.bin", h_yt, NUM_TEST);
   int *d_yt;
   CUDA_CHECK(cudaMalloc(&d_yt, sizeof(int) * NUM_TEST));
@@ -279,6 +282,10 @@ int main(void) {
   free(h_yt);
 
   printf("loaded %d train / %d test samples\n", NUM_TRAIN, NUM_TEST);
+
+  float *h_z2      = (float *)malloc(sizeof(float) * BATCH_SIZE * OUTPUT_SIZE);
+  float *h_dlogits = (float *)malloc(sizeof(float) * BATCH_SIZE * OUTPUT_SIZE);
+  int   *h_yb      = (int *)malloc(sizeof(int)   * BATCH_SIZE);
 
   int num_batches = NUM_TRAIN / BATCH_SIZE;
   int epochs = 20;
@@ -292,41 +299,63 @@ int main(void) {
       int   *yb = d_y + b * BATCH_SIZE;
 
       // forward
-      matmul_forward(Xb, nn.weights1, z1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
-      bias_forward(z1, nn.bias1, BATCH_SIZE, HIDDEN_SIZE);
-      relu_forward(z1, BATCH_SIZE * HIDDEN_SIZE);           // z1 now = a1
+      dim3 block2d(16, 16);
+      dim3 grid_l1((HIDDEN_SIZE + block2d.x - 1) / block2d.x, (BATCH_SIZE + block2d.y - 1) / block2d.y);
+      matmul_forward<<<grid_l1, block2d>>>(Xb, nn.weights1, z1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
 
-      matmul_forward(z1, nn.weights2, z2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
-      bias_forward(z2, nn.bias2, BATCH_SIZE, OUTPUT_SIZE);
-      softmax(z2, BATCH_SIZE, OUTPUT_SIZE);                 // z2 now = probs
+      int threads1d = 256;
+      int bias1_blocks = (BATCH_SIZE * HIDDEN_SIZE + threads1d - 1) / threads1d;
+      bias_forward<<<bias1_blocks, threads1d>>>(z1, nn.bias1, BATCH_SIZE, HIDDEN_SIZE);
 
-      epoch_loss += cross_entropy_loss(z2, yb, BATCH_SIZE, OUTPUT_SIZE);
+      relu_forward<<<grid_l1, block2d>>>(z1, BATCH_SIZE, HIDDEN_SIZE);           // z1 now = a1
+
+      dim3 grid_l2((OUTPUT_SIZE + block2d.x - 1) / block2d.x, (BATCH_SIZE + block2d.y - 1) / block2d.y);
+      matmul_forward<<<grid_l2, block2d>>>(z1, nn.weights2, z2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
+
+      int bias2_blocks = (BATCH_SIZE * OUTPUT_SIZE + threads1d - 1) / threads1d;
+      bias_forward<<<bias2_blocks, threads1d>>>(z2, nn.bias2, BATCH_SIZE, OUTPUT_SIZE);
+      CUDA_CHECK(cudaGetLastError());
+
+      // pull this batch's logits + labels to host — softmax/loss/argmax/grad
+      // below are plain CPU functions, they can't read device pointers.
+      CUDA_CHECK(cudaMemcpy(h_z2, z2, sizeof(float) * BATCH_SIZE * OUTPUT_SIZE, cudaMemcpyDeviceToHost));
+      CUDA_CHECK(cudaMemcpy(h_yb, yb, sizeof(int) * BATCH_SIZE, cudaMemcpyDeviceToHost));
+
+      softmax(h_z2, BATCH_SIZE, OUTPUT_SIZE);                 // h_z2 now = probs
+
+      epoch_loss += cross_entropy_loss(h_z2, h_yb, BATCH_SIZE, OUTPUT_SIZE);
 
       // accuracy: argmax of each row
       for (int r = 0; r < BATCH_SIZE; r++) {
         int best = 0;
         for (int c = 1; c < OUTPUT_SIZE; c++)
-          if (z2[r * OUTPUT_SIZE + c] > z2[r * OUTPUT_SIZE + best]) best = c;
-        if (best == yb[r]) correct++;
+          if (h_z2[r * OUTPUT_SIZE + c] > h_z2[r * OUTPUT_SIZE + best]) best = c;
+        if (best == h_yb[r]) correct++;
       }
 
-      // backward 
-      softmax_ce_grad(z2, yb, dlogits, BATCH_SIZE, OUTPUT_SIZE);
+      // backward, compute dlogits on host, then push it back to device
+      // for linear_backward, which expects a device pointer.
+      softmax_ce_grad(h_z2, h_yb, h_dlogits, BATCH_SIZE, OUTPUT_SIZE);
+      CUDA_CHECK(cudaMemcpy(dlogits, h_dlogits, sizeof(float) * BATCH_SIZE * OUTPUT_SIZE, cudaMemcpyHostToDevice));
 
       // layer 2 consumes dlogits -> nn.grad_weights2, nn.grad_bias2, da1
       linear_backward(z1, nn.weights2, dlogits, da1, nn.grad_weights2, nn.grad_bias2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
 
       // relu: mask da1 by where a1 (=z1) was on
-      relu_backward(da1, z1, dz1, BATCH_SIZE * HIDDEN_SIZE);
+      relu_backward<<<grid_l1, block2d>>>(da1, z1, dz1, BATCH_SIZE, HIDDEN_SIZE);
 
       // layer 1 consumes dz1 -> nn.grad_weights1, nn.grad_bias1 (dXin unused)
       linear_backward(Xb, nn.weights1, dz1, dXin, nn.grad_weights1, nn.grad_bias1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
 
-      // update 
-      sgd_update(nn.weights1, nn.grad_weights1, INPUT_SIZE  * HIDDEN_SIZE);
-      sgd_update(nn.bias1, nn.grad_bias1, HIDDEN_SIZE);
-      sgd_update(nn.weights2, nn.grad_weights2, HIDDEN_SIZE * OUTPUT_SIZE);
-      sgd_update(nn.bias2, nn.grad_bias2, OUTPUT_SIZE);
+      // update
+      int w1_size = INPUT_SIZE * HIDDEN_SIZE;
+      sgd_update<<<(w1_size + threads1d - 1) / threads1d, threads1d>>>(nn.weights1, nn.grad_weights1, w1_size);
+      sgd_update<<<(HIDDEN_SIZE + threads1d - 1) / threads1d, threads1d>>>(nn.bias1, nn.grad_bias1, HIDDEN_SIZE);
+
+      int w2_size = HIDDEN_SIZE * OUTPUT_SIZE;
+      sgd_update<<<(w2_size + threads1d - 1) / threads1d, threads1d>>>(nn.weights2, nn.grad_weights2, w2_size);
+      sgd_update<<<(OUTPUT_SIZE + threads1d - 1) / threads1d, threads1d>>>(nn.bias2, nn.grad_bias2, OUTPUT_SIZE);
+      CUDA_CHECK(cudaGetLastError());
     }
 
     printf("epoch %2d | loss %.4f | acc %.1f%%\n", epoch, epoch_loss / num_batches, 100.0f * correct / (num_batches * BATCH_SIZE));
@@ -339,26 +368,40 @@ int main(void) {
     float *Xb = d_Xt + b * BATCH_SIZE * INPUT_SIZE;
     int   *yb = d_yt + b * BATCH_SIZE;
 
-    matmul_forward(Xb, nn.weights1, z1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
-    bias_forward(z1, nn.bias1, BATCH_SIZE, HIDDEN_SIZE);
-    relu_forward(z1, BATCH_SIZE * HIDDEN_SIZE);
-    matmul_forward(z1, nn.weights2, z2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
-    bias_forward(z2, nn.bias2, BATCH_SIZE, OUTPUT_SIZE);
-    softmax(z2, BATCH_SIZE, OUTPUT_SIZE);
+    dim3 block2d(16, 16);
+    dim3 grid_l1((HIDDEN_SIZE + block2d.x - 1) / block2d.x, (BATCH_SIZE + block2d.y - 1) / block2d.y);
+    matmul_forward<<<grid_l1, block2d>>>(Xb, nn.weights1, z1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
+
+    int threads1d = 256;
+    bias_forward<<<(BATCH_SIZE * HIDDEN_SIZE + threads1d - 1) / threads1d, threads1d>>>(z1, nn.bias1, BATCH_SIZE, HIDDEN_SIZE);
+
+    relu_forward<<<grid_l1, block2d>>>(z1, BATCH_SIZE, HIDDEN_SIZE);
+
+    dim3 grid_l2((OUTPUT_SIZE + block2d.x - 1) / block2d.x, (BATCH_SIZE + block2d.y - 1) / block2d.y);
+    matmul_forward<<<grid_l2, block2d>>>(z1, nn.weights2, z2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
+
+    bias_forward<<<(BATCH_SIZE * OUTPUT_SIZE + threads1d - 1) / threads1d, threads1d>>>(z2, nn.bias2, BATCH_SIZE, OUTPUT_SIZE);
+    CUDA_CHECK(cudaGetLastError());
+
+    CUDA_CHECK(cudaMemcpy(h_z2, z2, sizeof(float) * BATCH_SIZE * OUTPUT_SIZE, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_yb, yb, sizeof(int) * BATCH_SIZE, cudaMemcpyDeviceToHost));
+
+    softmax(h_z2, BATCH_SIZE, OUTPUT_SIZE);
 
     for (int r = 0; r < BATCH_SIZE; r++) {
       int best = 0;
       for (int c = 1; c < OUTPUT_SIZE; c++)
-        if (z2[r * OUTPUT_SIZE + c] > z2[r * OUTPUT_SIZE + best]) best = c;
-      if (best == yb[r]) test_correct++;
+        if (h_z2[r * OUTPUT_SIZE + c] > h_z2[r * OUTPUT_SIZE + best]) best = c;
+      if (best == h_yb[r]) test_correct++;
     }
   }
   printf("---\ntest accuracy: %.2f%%\n", 100.0f * test_correct / (test_batches * BATCH_SIZE));
 
-  free(nn.weights1); free(nn.bias1); free(nn.weights2); free(nn.bias2);
-  free(nn.grad_weights1); free(nn.grad_bias1); free(nn.grad_weights2); free(nn.grad_bias2);
+  cudaFree(nn.weights1); cudaFree(nn.bias1); cudaFree(nn.weights2); cudaFree(nn.bias2);
+  cudaFree(nn.grad_weights1); cudaFree(nn.grad_bias1); cudaFree(nn.grad_weights2); cudaFree(nn.grad_bias2);
   cudaFree(z1); cudaFree(z2);
   cudaFree(dlogits); cudaFree(da1); cudaFree(dz1); cudaFree(dXin);
+  free(h_z2); free(h_dlogits); free(h_yb);
   cudaFree(d_X); cudaFree(d_y); cudaFree(d_Xt); cudaFree(d_yt);
   return 0;
 }
