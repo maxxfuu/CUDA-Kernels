@@ -3,6 +3,7 @@
 #include <math.h>
 #include <time.h>
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #define CUDA_CHECK(call) do { cudaError_t error = call; if (error != cudaSuccess) { fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(error)); cudaDeviceReset(); exit(EXIT_FAILURE); } } while(0)
 
 #define INPUT_SIZE 784
