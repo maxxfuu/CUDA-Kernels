@@ -289,8 +289,8 @@ int main(void) {
   initialize_neural_network(&nn);
 
   // initialize cuBLAS context
-  cublasHandle_t cublas_handle; 
-  cublasCreate(&cublas_handle);
+  cublasHandle_t cublas_handle;
+  CUBLAS_CHECK(cublasCreate(&cublas_handle));
 
   float *z1, *z2, *dlogits, *da1, *dz1, *dXin;
   CUDA_CHECK(cudaMalloc(&z1, sizeof(float) * BATCH_SIZE * HIDDEN_SIZE));
