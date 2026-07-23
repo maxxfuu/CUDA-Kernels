@@ -222,14 +222,37 @@ void softmax_ce_grad(float *probs, int *y, float *dlogits, int rows, int cols) {
   }
 }
 
-void linear_backward(float *X, float *W, float *dY, float *dX, float *dW, float *db, int rows, int in, int out) {
-  dim3 block(16, 16);
+void linear_backward(cublasHandle_t handle, float *X, float *W, float *dY, float *dX, float *dW, float *db, int rows, int in, int out) {
+  const float alpha = 1.0f;
+  const float beta  = 0.0f;
 
-  dim3 grid_dw((out + block.x - 1) / block.x, (in + block.y - 1) / block.y);
-  matmul_at_b<<<grid_dw, block>>>(X, dY, dW, rows, in, out);
+  // matmul_at_b<<<grid_dw, block>>>(X, dY, dW, rows, in, out);
+  CUBLAS_CHECK(cublasSgemm(
+    handle,
+    CUBLAS_OP_N,   // dY: plain in the math
+    CUBLAS_OP_T,   // X:  transposed in the math
+    out,           // m   = row width of dW
+    in,            // n   = row count of dW
+    rows,          // k   = shared dim (batch)
+    &alpha,
+    dY, out,       // lda = row width of dY buffer
+    X, in,         // ldb = row width of X buffer
+    &beta,
+    dW, out));     // ldc = row width of dW buffer
 
-  dim3 grid_dx((in + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
-  matmul_a_bt<<<grid_dx, block>>>(dY, W, dX, rows, out, in);
+  // matmul_a_bt<<<grid_dx, block>>>(dY, W, dX, rows, out, in);
+  CUBLAS_CHECK(cublasSgemm(
+    handle,
+    CUBLAS_OP_T,   // W:  transposed in the math
+    CUBLAS_OP_N,   // dY: plain in the math
+    in,            // m   = row width of dX
+    rows,          // n   = row count of dX
+    out,           // k   = shared dim
+    &alpha,
+    W, out,        // lda = row width of W buffer
+    dY, out,       // ldb = row width of dY buffer
+    &beta,
+    dX, in));      // ldc = row width of dX buffer
 
   int threads = 256;
   int blocks = (out + threads - 1) / threads;
@@ -314,6 +337,9 @@ int main(void) {
   int num_batches = NUM_TRAIN / BATCH_SIZE;
   int epochs = 20;
 
+  const float alpha = 1.0f; 
+  const float beta = 0.0f; 
+
   for (int epoch = 0; epoch < epochs; epoch++) {
     float epoch_loss = 0.0f;
     int correct = 0;
@@ -325,7 +351,25 @@ int main(void) {
       // forward
       dim3 block2d(16, 16);
       dim3 grid_l1((HIDDEN_SIZE + block2d.x - 1) / block2d.x, (BATCH_SIZE + block2d.y - 1) / block2d.y);
-      matmul_forward<<<grid_l1, block2d>>>(Xb, nn.weights1, z1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
+      // matmul_forward<<<grid_l1, block2d>>>(Xb, nn.weights1, z1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
+
+      CUBLAS_CHECK(cublasSgemm(
+        cublas_handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        HIDDEN_SIZE,
+        BATCH_SIZE,
+        INPUT_SIZE,
+        &alpha,
+        nn.weights1,
+        HIDDEN_SIZE,
+        Xb,
+        INPUT_SIZE,
+        &beta,
+        z1,
+        HIDDEN_SIZE
+        )
+      );
 
       int threads1d = 256;
       int bias1_blocks = (BATCH_SIZE * HIDDEN_SIZE + threads1d - 1) / threads1d;
@@ -334,7 +378,25 @@ int main(void) {
       relu_forward<<<grid_l1, block2d>>>(z1, BATCH_SIZE, HIDDEN_SIZE);           // z1 now = a1
 
       dim3 grid_l2((OUTPUT_SIZE + block2d.x - 1) / block2d.x, (BATCH_SIZE + block2d.y - 1) / block2d.y);
-      matmul_forward<<<grid_l2, block2d>>>(z1, nn.weights2, z2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
+      // matmul_forward<<<grid_l2, block2d>>>(z1, nn.weights2, z2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
+
+      CUBLAS_CHECK(cublasSgemm(
+        cublas_handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        OUTPUT_SIZE,
+        BATCH_SIZE,
+        HIDDEN_SIZE,
+        &alpha,
+        nn.weights2,
+        OUTPUT_SIZE,
+        z1,
+        HIDDEN_SIZE,
+        &beta,
+        z2,
+        OUTPUT_SIZE
+        )
+      );
 
       int bias2_blocks = (BATCH_SIZE * OUTPUT_SIZE + threads1d - 1) / threads1d;
       bias_forward<<<bias2_blocks, threads1d>>>(z2, nn.bias2, BATCH_SIZE, OUTPUT_SIZE);
@@ -363,13 +425,13 @@ int main(void) {
       CUDA_CHECK(cudaMemcpy(dlogits, h_dlogits, sizeof(float) * BATCH_SIZE * OUTPUT_SIZE, cudaMemcpyHostToDevice));
 
       // layer 2 consumes dlogits -> nn.grad_weights2, nn.grad_bias2, da1
-      linear_backward(z1, nn.weights2, dlogits, da1, nn.grad_weights2, nn.grad_bias2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
+      linear_backward(cublas_handle, z1, nn.weights2, dlogits, da1, nn.grad_weights2, nn.grad_bias2, BATCH_SIZE, HIDDEN_SIZE, OUTPUT_SIZE);
 
       // relu: mask da1 by where a1 (=z1) was on
       relu_backward<<<grid_l1, block2d>>>(da1, z1, dz1, BATCH_SIZE, HIDDEN_SIZE);
 
       // layer 1 consumes dz1 -> nn.grad_weights1, nn.grad_bias1 (dXin unused)
-      linear_backward(Xb, nn.weights1, dz1, dXin, nn.grad_weights1, nn.grad_bias1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
+      linear_backward(cublas_handle, Xb, nn.weights1, dz1, dXin, nn.grad_weights1, nn.grad_bias1, BATCH_SIZE, INPUT_SIZE, HIDDEN_SIZE);
 
       // update
       int w1_size = INPUT_SIZE * HIDDEN_SIZE;
@@ -427,7 +489,7 @@ int main(void) {
   cudaFree(dlogits); cudaFree(da1); cudaFree(dz1); cudaFree(dXin);
   free(h_z2); free(h_dlogits); free(h_yb);
   cudaFree(d_X); cudaFree(d_y); cudaFree(d_Xt); cudaFree(d_yt);
-  
+
   CUBLAS_CHECK(cublasDestroy(cublas_handle));
   return 0;
 }
