@@ -265,6 +265,10 @@ int main(void) {
   NeuralNetwork nn; 
   initialize_neural_network(&nn);
 
+  // initialize cuBLAS context
+  cublasHandle_t cublas_handle; 
+  cublasCreate(&cublas_handle);
+
   float *z1, *z2, *dlogits, *da1, *dz1, *dXin;
   CUDA_CHECK(cudaMalloc(&z1, sizeof(float) * BATCH_SIZE * HIDDEN_SIZE));
   CUDA_CHECK(cudaMalloc(&z2, sizeof(float) * BATCH_SIZE * OUTPUT_SIZE));
@@ -423,5 +427,7 @@ int main(void) {
   cudaFree(dlogits); cudaFree(da1); cudaFree(dz1); cudaFree(dXin);
   free(h_z2); free(h_dlogits); free(h_yb);
   cudaFree(d_X); cudaFree(d_y); cudaFree(d_Xt); cudaFree(d_yt);
+  
+  CUBLAS_CHECK(cublasDestroy(cublas_handle));
   return 0;
 }
