@@ -8,8 +8,11 @@ book.cu-main/
 naive-kernels/mnist/data/*.bin
 mnist-kernel/data/*.bin
 
-# compiled C binary
 mnist-kernel/mnist
+mnist-kernel/viz
+mnist-kernel/data
+
+viz
 
 # generated gradient-check reference outputs (regenerate via export_reference.py)
 naive-kernels/mnist/from_scratch/ref/*.bin
